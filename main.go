@@ -2,26 +2,27 @@ package main
 
 import (
 	"bufio"
+	"flag"
 	"fmt"
 	"io"
 	"log"
 	"strings"
+	"time"
 
+	"github.com/cirias/tgbot"
 	"github.com/tarm/serial"
 )
 
-type SMS struct {
-	From    string
-	Date    string
-	Content string
-}
-
-func (s *SMS) String() string {
-	return fmt.Sprintf("From: %s\r\nDate: %s\r\nContent: %s", s.From, s.Date, s.Content)
-}
+var (
+	dev    = flag.String("dev", "/dev/ttyAMA0", "device path of serial port")
+	token  = flag.String("token", "", "telegram bot token")
+	chatId = flag.Int64("chatId", 0, "telegram chart id")
+)
 
 func main() {
-	c := &serial.Config{Name: "/dev/ttyAMA0", Baud: 115200}
+	flag.Parse()
+
+	c := &serial.Config{Name: *dev, Baud: 115200}
 
 	s, err := serial.OpenPort(c)
 	if err != nil {
@@ -29,12 +30,26 @@ func main() {
 	}
 
 	smsCh := make(chan *SMS)
+	msgCh := make(chan *Message)
+
+	bot := tgbot.NewBot(*token)
 
 	go func() {
-		for sms := range smsCh {
-			fmt.Println(sms)
+		if err := Serve(bot); err != nil {
+			log.Fatalln(err)
 		}
 	}()
+
+	go func() {
+		for m := range msgCh {
+			log.Println("sending message:\n", m)
+			if err := SendMessage(bot, *chatId, m); err != nil {
+				log.Fatalln(err)
+			}
+		}
+	}()
+
+	go concat(smsCh, msgCh)
 
 	if err := handle(s, smsCh); err != nil {
 		log.Fatalln(err)
@@ -42,66 +57,76 @@ func main() {
 }
 
 func handle(s io.ReadWriter, out chan<- *SMS) error {
-	var SetTextMode = []byte("AT+CMGF=1\r\n")
-	var ListUnreadSMS = []byte("AT+CMGL=\"REC UNREAD\"\r\n")
+	var SetPDUMode = []byte("AT+CMGF=0\r\n")
+	var ListUnreadSMS = []byte(fmt.Sprintf("AT+CMGL=%d\r\n", ReceivedUnread))
+	var DeleteReadSMS = []byte("AT+CMGDA=1\r\n")
 
-	if _, err := s.Write(SetTextMode); err != nil {
+	if _, err := s.Write(SetPDUMode); err != nil {
 		return fmt.Errorf("could not write to serial:", err)
 	}
 
-	var sms *SMS
-
+	command := ""
 	scanner := bufio.NewScanner(s)
 	for scanner.Scan() {
 		line := scanner.Text()
-		log.Println("<-serial:", line)
+		log.Println("read line:", line)
 
 		switch line {
 		case "":
-			if sms != nil {
-				sms.Content += "\r\n"
-			}
 			continue
 		case "OK":
-			if sms != nil { // All +CMGL finished
-				// send last SMS
-				out <- sms
+			if command == "CMGL" {
+				if _, err := s.Write(DeleteReadSMS); err != nil {
+					return fmt.Errorf("could not write to serial port: %v", err)
+				}
 			}
-			sms = nil
+
+			command = ""
 			continue
 		case "ERROR":
+			command = ""
 			return fmt.Errorf("unexpected ERROR")
-		default:
 		}
 
 		if strings.HasPrefix(line, "+CMGL: ") {
-			if sms != nil { // multiple +CMGL response
-				// send privous SMS first
-				out <- sms
+			command = "CMGL"
+
+			cmgl, err := decodeCMGL(line[7:])
+			if err != nil {
+				return fmt.Errorf("could not decode CMGL: %v", err)
 			}
 
-			args := strings.Split(line[7:], ",")
-			if len(args) < 5 {
-				return fmt.Errorf("invalid +CMGL response args from line: %s", line)
+			if cmgl.MessageStatus != ReceivedUnread {
+				continue
 			}
 
-			sms = &SMS{
-				From: strings.Trim(args[2], "\""),
-				Date: strings.Trim(args[4], "\""),
+			if !scanner.Scan() {
+				break
 			}
-		} else if strings.HasPrefix(line, "+CMTI: ") {
-			if sms != nil {
-				return fmt.Errorf("unexpected +CMTI response during another unfinishd +CMGL response")
+
+			line := scanner.Text()
+
+			log.Println("decoding SMS:", line)
+			sms, err := decodeSMS(scanner.Text())
+			if err != nil {
+				return fmt.Errorf("could not decode SMS: %v", err)
 			}
+
+			out <- sms
+			continue
+		}
+
+		if strings.HasPrefix(line, "+CMTI: ") {
+			command = "CMTI"
 
 			if _, err := s.Write(ListUnreadSMS); err != nil {
 				return fmt.Errorf("could not write to serial port: %v", err)
 			}
-		} else if sms != nil {
-			sms.Content += line + "\r"
-		} else {
-			log.Println("ignore command:", line)
+			continue
 		}
+
+		command = ""
+		log.Println("ignore line:", line)
 	}
 
 	if err := scanner.Err(); err != nil {
@@ -109,4 +134,61 @@ func handle(s io.ReadWriter, out chan<- *SMS) error {
 	}
 
 	return nil
+}
+
+type Message struct {
+	From    string
+	Date    time.Time
+	Content string
+}
+
+func (m *Message) String() string {
+	return fmt.Sprintf("*%s*\n*%s*\n%s", m.From, m.Date.Format(time.RFC3339), m.Content)
+}
+
+func concat(in <-chan *SMS, out chan<- *Message) {
+	lookup := make(map[byte][]*SMS)
+
+LOOP_IN:
+	for sms := range in {
+
+		for _, el := range sms.Tpdu.UDH {
+			udhc, ok := el.(UDHConcatenated)
+			if !ok {
+				continue
+			}
+
+			ms, ok := lookup[udhc.Reference]
+			if !ok {
+				ms = make([]*SMS, udhc.Total)
+				lookup[udhc.Reference] = ms
+			}
+
+			ms[udhc.Index-1] = sms
+
+			content := ""
+			for _, m := range ms {
+				if m == nil {
+					continue LOOP_IN
+				}
+
+				content += m.Tpdu.UD
+			}
+
+			out <- &Message{
+				From:    sms.Tpdu.OA,
+				Date:    sms.Tpdu.SCTS,
+				Content: content,
+			}
+			delete(lookup, udhc.Reference)
+
+			continue LOOP_IN
+		}
+
+		out <- &Message{
+			From:    sms.Tpdu.OA,
+			Date:    sms.Tpdu.SCTS,
+			Content: sms.Tpdu.UD,
+		}
+	}
 }
