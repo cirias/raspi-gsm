@@ -190,9 +190,23 @@ func decodeUDH(bs []byte) ([]interface{}, error) {
 func decodeUD(dcs byte, bs []byte) (string, error) {
 	switch dcs {
 	case 0x00:
+		fallthrough
+	case 0x01:
+		fallthrough
+	case 0x02:
+		fallthrough
+	case 0x03:
 		return decode7bit(bs), nil
+
 	case 0x08:
+		fallthrough
+	case 0x09:
+		fallthrough
+	case 0x0a:
+		fallthrough
+	case 0x0b:
 		return decodeUTF16(bs), nil
+
 	default:
 		return "", fmt.Errorf("unknown data coding scheme")
 	}

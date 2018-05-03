@@ -109,7 +109,9 @@ func handle(s io.ReadWriter, out chan<- *SMS) error {
 			log.Println("decoding SMS:", line)
 			sms, err := decodeSMS(scanner.Text())
 			if err != nil {
-				return fmt.Errorf("could not decode SMS: %v", err)
+				log.Printf("could not decode SMS: %v", err)
+				continue
+				// return fmt.Errorf("could not decode SMS: %v", err)
 			}
 
 			out <- sms
