@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"time"
 
 	"github.com/cirias/tgbot"
 	"github.com/pkg/errors"
@@ -28,8 +27,7 @@ func main() {
 		log.Fatalf("could not open port: %s", err)
 	}
 
-	smsCh := make(chan *SMS)
-	msgCh := make(chan *Message)
+	msgCh := make(chan fmt.Stringer)
 
 	bot := tgbot.NewBot(*token)
 
@@ -48,14 +46,12 @@ func main() {
 		}
 	}()
 
-	go concat(smsCh, msgCh)
-
-	if err := handle(s, smsCh); err != nil {
+	if err := handle(s, msgCh); err != nil {
 		log.Fatalln(err)
 	}
 }
 
-func handle(s io.ReadWriter, out chan<- *SMS) error {
+func handle(s io.ReadWriter, out chan<- fmt.Stringer) error {
 	var SetPDUMode = []byte("AT+CMGF=0\r\n")
 	var ListUnreadSMS = []byte(fmt.Sprintf("AT+CMGL=%d\r\n", ReceivedUnread))
 	var DeleteReadSMS = []byte("AT+CMGDA=1\r\n")
@@ -64,21 +60,18 @@ func handle(s io.ReadWriter, out chan<- *SMS) error {
 		return fmt.Errorf("could not write to serial:", err)
 	}
 
+	r := NewEventReader(s)
+
 	for {
-		event, err := ReadEvent(s)
+		event, err := r.ReadEvent()
 		if err != nil {
 			return errors.Wrap(err, "could not read event")
 		}
 
 		switch event.(type) {
-		case EventCMGL:
-			e := event.(*EventCMGL)
-			if e.CMGL.MessageStatus != ReceivedUnread {
-				continue
-			}
-
-			out <- e.SMS
-		case EventCMTI:
+		case *EventMessage:
+			out <- event.(*EventMessage)
+		case *EventCMTI:
 			if _, err := s.Write(DeleteReadSMS); err != nil {
 				return fmt.Errorf("could not write to serial port: %v", err)
 			}
@@ -89,61 +82,4 @@ func handle(s io.ReadWriter, out chan<- *SMS) error {
 	}
 
 	return nil
-}
-
-type Message struct {
-	From    string
-	Date    time.Time
-	Content string
-}
-
-func (m *Message) String() string {
-	return fmt.Sprintf("*%s*\n*%s*\n%s", m.From, m.Date.Format(time.RFC3339), m.Content)
-}
-
-func concat(in <-chan *SMS, out chan<- *Message) {
-	lookup := make(map[byte][]*SMS)
-
-LOOP_IN:
-	for sms := range in {
-
-		for _, el := range sms.Tpdu.UDH {
-			udhc, ok := el.(UDHConcatenated)
-			if !ok {
-				continue
-			}
-
-			ms, ok := lookup[udhc.Reference]
-			if !ok {
-				ms = make([]*SMS, udhc.Total)
-				lookup[udhc.Reference] = ms
-			}
-
-			ms[udhc.Index-1] = sms
-
-			content := ""
-			for _, m := range ms {
-				if m == nil {
-					continue LOOP_IN
-				}
-
-				content += m.Tpdu.UD
-			}
-
-			out <- &Message{
-				From:    sms.Tpdu.OA,
-				Date:    sms.Tpdu.SCTS,
-				Content: content,
-			}
-			delete(lookup, udhc.Reference)
-
-			continue LOOP_IN
-		}
-
-		out <- &Message{
-			From:    sms.Tpdu.OA,
-			Date:    sms.Tpdu.SCTS,
-			Content: sms.Tpdu.UD,
-		}
-	}
 }

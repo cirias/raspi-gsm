@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"log"
 	"math"
 	"time"
@@ -49,7 +50,7 @@ func Serve(bot *tgbot.Bot) error {
 	}
 }
 
-func SendMessage(bot *tgbot.Bot, chatId int64, m *Message) error {
+func SendMessage(bot *tgbot.Bot, chatId int64, m fmt.Stringer) error {
 	return willRetry(func() error {
 		_, err := bot.SendMessage(&tgbot.SendMessageParams{
 			ChatId:    chatId,

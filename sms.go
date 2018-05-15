@@ -173,8 +173,8 @@ func decodeUDH(bs []byte) ([]interface{}, error) {
 
 		switch ieh[0] {
 		case 0x00:
-			el := UDHConcatenated{}
-			if err := binary.Read(buf, binary.LittleEndian, &el); err != nil {
+			el := &UDHConcatenated{}
+			if err := binary.Read(buf, binary.LittleEndian, el); err != nil {
 				return nil, fmt.Errorf("could not read UDHConcatenated: %v", err)
 			}
 			els = append(els, el)
