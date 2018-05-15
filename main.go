@@ -1,3 +1,4 @@
+// http://www.glynstore.com/content/docs/terminals/Telit_AT_Commands_Reference_Guide_r8.pdf
 package main
 
 import (
@@ -5,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"time"
 
 	"github.com/cirias/tgbot"
 	"github.com/pkg/errors"
@@ -18,6 +20,7 @@ var (
 )
 
 var SetPDUMode = []byte("AT+CMGF=0\r\n")
+var EnableErrorCode = []byte("AT+CMEE=1\r\n")
 var ListUnreadSMS = []byte(fmt.Sprintf("AT+CMGL=%d\r\n", ReceivedUnread))
 var DeleteReadSMS = []byte("AT+CMGDA=1\r\n")
 
@@ -47,7 +50,7 @@ func main() {
 			log.Fatalln(err)
 		}
 
-		log.Println("sending message:\n", m)
+		log.Printf("sending message:\n%s\n", m)
 		if err := SendMessage(bot, *chatId, m); err != nil {
 			log.Fatalln(err)
 		}
@@ -59,11 +62,17 @@ func newMessageReader(port io.ReadWriter) (EventReader, error) {
 		return nil, fmt.Errorf("could not write to serial:", err)
 	}
 
+	time.Sleep(100 * time.Millisecond)
+
+	if _, err := port.Write(EnableErrorCode); err != nil {
+		return nil, fmt.Errorf("could not write to serial:", err)
+	}
+
 	rawReader := NewRawEventReader(port)
 	return NewConcatedMessageReader(rawReader), nil
 }
 
-func readMessage(port io.Writer, r EventReader) (fmt.Stringer, error) {
+func readMessage(port io.ReadWriter, r EventReader) (fmt.Stringer, error) {
 	for {
 		event, err := r.ReadEvent()
 		if err != nil {
@@ -75,10 +84,14 @@ func readMessage(port io.Writer, r EventReader) (fmt.Stringer, error) {
 			return event.(*EventMessage), nil
 		case *EventCMTI:
 			if _, err := port.Write(DeleteReadSMS); err != nil {
-				return nil, fmt.Errorf("could not write to serial port: %v", err)
+				return nil, errors.Wrap(err, "could not write to serial port")
 			}
+
+			// wait or will get error 604: can not allocate control socket
+			time.Sleep(100 * time.Millisecond)
+
 			if _, err := port.Write(ListUnreadSMS); err != nil {
-				return nil, fmt.Errorf("could not write to serial port: %v", err)
+				return nil, errors.Wrap(err, "could not write to serial port")
 			}
 		}
 	}

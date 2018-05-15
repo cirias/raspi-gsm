@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"io"
+	"log"
 	"strings"
 	"time"
 
@@ -79,6 +80,7 @@ func NewRawEventReader(r io.Reader) *RawEventReader {
 func (r *RawEventReader) ReadEvent() (Event, error) {
 	// parsers := []ParseFunc{parseCMTI, parseCMGL}
 	for r.scanner.Scan() {
+		log.Println("line:", strings.TrimSpace(r.scanner.Text()))
 		for _, parse := range r.parseFuncs {
 			event, err := parse(r.scanner)
 			if err != nil {
@@ -136,8 +138,8 @@ LOOP_EVENT:
 		for _, el := range e.SMS.Tpdu.UDH {
 			var ok bool
 			udhc, ok = el.(*UDHConcatenated)
-			if !ok {
-				continue
+			if ok {
+				break
 			}
 		}
 
