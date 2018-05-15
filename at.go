@@ -64,11 +64,6 @@ type EventReader interface {
 	ReadEvent() (Event, error)
 }
 
-func NewEventReader(r io.Reader) EventReader {
-	rawReader := NewRawEventReader(r)
-	return NewConcatedMessageReader(rawReader)
-}
-
 type RawEventReader struct {
 	scanner    *bufio.Scanner
 	parseFuncs []ParseFunc
