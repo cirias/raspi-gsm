@@ -1,15 +1,14 @@
 package main
 
 import (
-	"bufio"
 	"flag"
 	"fmt"
 	"io"
 	"log"
-	"strings"
 	"time"
 
 	"github.com/cirias/tgbot"
+	"github.com/pkg/errors"
 	"github.com/tarm/serial"
 )
 
@@ -65,74 +64,28 @@ func handle(s io.ReadWriter, out chan<- *SMS) error {
 		return fmt.Errorf("could not write to serial:", err)
 	}
 
-	command := ""
-	scanner := bufio.NewScanner(s)
-	for scanner.Scan() {
-		line := scanner.Text()
-		log.Println("read line:", line)
-
-		switch line {
-		case "":
-			continue
-		case "OK":
-			if command == "CMGL" {
-				if _, err := s.Write(DeleteReadSMS); err != nil {
-					return fmt.Errorf("could not write to serial port: %v", err)
-				}
-			}
-
-			command = ""
-			continue
-		case "ERROR":
-			command = ""
-			return fmt.Errorf("unexpected ERROR")
+	for {
+		event, err := ReadEvent(s)
+		if err != nil {
+			return errors.Wrap(err, "could not read event")
 		}
 
-		if strings.HasPrefix(line, "+CMGL: ") {
-			command = "CMGL"
-
-			cmgl, err := decodeCMGL(line[7:])
-			if err != nil {
-				return fmt.Errorf("could not decode CMGL: %v", err)
-			}
-
-			if cmgl.MessageStatus != ReceivedUnread {
+		switch event.(type) {
+		case EventCMGL:
+			e := event.(*EventCMGL)
+			if e.CMGL.MessageStatus != ReceivedUnread {
 				continue
 			}
 
-			if !scanner.Scan() {
-				break
+			out <- e.SMS
+		case EventCMTI:
+			if _, err := s.Write(DeleteReadSMS); err != nil {
+				return fmt.Errorf("could not write to serial port: %v", err)
 			}
-
-			line := scanner.Text()
-
-			log.Println("decoding SMS:", line)
-			sms, err := decodeSMS(scanner.Text())
-			if err != nil {
-				log.Printf("could not decode SMS: %v", err)
-				continue
-				// return fmt.Errorf("could not decode SMS: %v", err)
-			}
-
-			out <- sms
-			continue
-		}
-
-		if strings.HasPrefix(line, "+CMTI: ") {
-			command = "CMTI"
-
 			if _, err := s.Write(ListUnreadSMS); err != nil {
 				return fmt.Errorf("could not write to serial port: %v", err)
 			}
-			continue
 		}
-
-		command = ""
-		log.Println("ignore line:", line)
-	}
-
-	if err := scanner.Err(); err != nil {
-		return fmt.Errorf("could not scan: %v", err)
 	}
 
 	return nil
