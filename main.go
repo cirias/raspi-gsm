@@ -72,7 +72,7 @@ func newMessageReader(port io.ReadWriter) (EventReader, error) {
 	return NewConcatedMessageReader(rawReader), nil
 }
 
-func readMessage(port io.ReadWriter, r EventReader) (fmt.Stringer, error) {
+func readMessage(port io.Writer, r EventReader) (fmt.Stringer, error) {
 	for {
 		event, err := r.ReadEvent()
 		if err != nil {
