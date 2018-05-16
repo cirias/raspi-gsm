@@ -11,8 +11,7 @@ import (
 	"github.com/pkg/errors"
 )
 
-type Event interface {
-}
+type Event interface{}
 
 type ParseFunc func(*bufio.Scanner) (Event, error)
 
@@ -80,7 +79,7 @@ func NewRawEventReader(r io.Reader) *RawEventReader {
 func (r *RawEventReader) ReadEvent() (Event, error) {
 	// parsers := []ParseFunc{parseCMTI, parseCMGL}
 	for r.scanner.Scan() {
-		log.Println("line:", strings.TrimSpace(r.scanner.Text()))
+		log.Println("line:", r.scanner.Text())
 		for _, parse := range r.parseFuncs {
 			event, err := parse(r.scanner)
 			if err != nil {
@@ -118,7 +117,6 @@ func (m *EventMessage) String() string {
 }
 
 func (r *ConcatedMessageReader) ReadEvent() (Event, error) {
-LOOP_EVENT:
 	for {
 		event, err := r.reader.ReadEvent()
 		if err != nil {
@@ -134,14 +132,7 @@ LOOP_EVENT:
 			continue
 		}
 
-		var udhc *UDHConcatenated
-		for _, el := range e.SMS.Tpdu.UDH {
-			var ok bool
-			udhc, ok = el.(*UDHConcatenated)
-			if ok {
-				break
-			}
-		}
+		udhc := e.SMS.Tpdu.UDHConcatenated()
 
 		if udhc == nil {
 			return &EventMessage{
@@ -156,16 +147,11 @@ LOOP_EVENT:
 			ms = make([]*SMS, udhc.Total)
 			r.lookup[udhc.Reference] = ms
 		}
-
 		ms[udhc.Index-1] = e.SMS
 
-		content := ""
-		for _, m := range ms {
-			if m == nil {
-				continue LOOP_EVENT
-			}
-
-			content += m.Tpdu.UD
+		content := concatSMSContent(ms)
+		if content == "" {
+			continue
 		}
 
 		delete(r.lookup, udhc.Reference)
@@ -175,4 +161,17 @@ LOOP_EVENT:
 			Content: content,
 		}, nil
 	}
+}
+
+func concatSMSContent(ms []*SMS) string {
+	content := ""
+	for _, m := range ms {
+		if m == nil {
+			return ""
+		}
+
+		content += m.Tpdu.UD
+	}
+
+	return content
 }

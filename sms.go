@@ -71,6 +71,17 @@ type TPDU struct {
 	UD    string        // User Data
 }
 
+func (t *TPDU) UDHConcatenated() *UDHConcatenated {
+	for _, el := range t.UDH {
+		udhc, ok := el.(*UDHConcatenated)
+		if ok {
+			return udhc
+		}
+	}
+
+	return nil
+}
+
 const TP_UDHI byte = 0x40
 
 func decodeSMS(text string) (*SMS, error) {
