@@ -22,7 +22,7 @@ var (
 var SetPDUMode = []byte("AT+CMGF=0\r\n")
 var EnableErrorCode = []byte("AT+CMEE=1\r\n")
 var ListUnreadSMS = []byte(fmt.Sprintf("AT+CMGL=%d\r\n", ReceivedUnread))
-var DeleteReadSMS = []byte("AT+CMGDA=1\r\n")
+var DeleteReadSMS = []byte("AT+CMGD=1,1\r\n")
 
 func main() {
 	flag.Parse()
@@ -88,7 +88,8 @@ func readMessage(port io.Writer, r EventReader) (fmt.Stringer, error) {
 			}
 
 			// wait or will get error 604: can not allocate control socket
-			time.Sleep(100 * time.Millisecond)
+			// it's just take lots of time for deleting
+			time.Sleep(500 * time.Millisecond)
 
 			if _, err := port.Write(ListUnreadSMS); err != nil {
 				return nil, errors.Wrap(err, "could not write to serial port")
